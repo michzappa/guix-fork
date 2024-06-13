@@ -528,6 +528,21 @@ with text blocks from other extensions and the base service."))
                 #~(string-append "set -x " #$key " "  #$value "\n")))
              val)))
 
+(define (serialize-fish-functions field-name val)
+  (raise-exception
+   "Functions are serialized individually to separate files, do not include
+fish functions in a serialize-configuration or serialize-field."))
+
+(define serialize-fish-function-file
+  (match-lambda
+    ((key . value)
+     `(,(string-append "fish/functions/" key ".fish")
+       ,(mixed-text-file (string-append key "-function.fish")
+                         #~(string-append "function " #$key "\n\t"
+                                          #$value
+                                          "\nend"))))
+    (_ "")))
+
 (define-configuration home-fish-configuration
   (package
     (package fish)
@@ -551,13 +566,28 @@ shells, see the @code{abbreviations} field."
    (alist '())
    "Association list of abbreviations for Fish.  These are words that,
 when typed in the shell, will automatically expand to the full text."
-   (serializer serialize-fish-abbreviations)))
+   (serializer serialize-fish-abbreviations))
+  (functions
+   (alist '())
+   "Association list of functions for Fish. These are native Fish procedures
+with argument handling."
+   (serializer serialize-fish-functions)))
 
 (define (fish-files-service config)
-  `(("fish/config.fish"
-     ,(mixed-text-file
-       "fish-config.fish"
-       #~(string-append "\
+  (define (filter-fields field)
+    (filter-configuration-fields home-fish-configuration-fields
+                                 (list field)))
+
+  (define (serialize-field field)
+    (serialize-configuration
+     config
+     (filter-fields field)))
+
+  (append
+   `(("fish/config.fish"
+      ,(mixed-text-file
+        "fish-config.fish"
+        #~(string-append "\
 # if we haven't sourced the login config, do it
 status --is-login; and not set -q __fish_login_config_sourced
 and begin
@@ -571,9 +601,11 @@ and begin
   set -g __fish_login_config_sourced 1
 
 end\n\n")
-       (serialize-configuration
-        config
-        home-fish-configuration-fields)))))
+        (serialize-field 'abbreviations)
+        (serialize-field 'aliases)
+        (serialize-field 'env-vars))))
+   (map serialize-fish-function-file
+        (home-fish-configuration-functions config))))
 
 (define (fish-profile-service config)
   (list (home-fish-configuration-package config)))
@@ -590,7 +622,10 @@ end\n\n")
    "Association list of Fish aliases.")
   (abbreviations
    (alist '())
-   "Association list of Fish abbreviations."))
+   "Association list of Fish abbreviations.")
+  (functions
+   (alist '())
+   "Association list of Fish functions."))
 
 (define (home-fish-extensions original-config extension-configs)
   (home-fish-configuration
@@ -610,7 +645,11 @@ end\n\n")
    (abbreviations
     (append (home-fish-configuration-abbreviations original-config)
             (append-map
-             home-fish-extension-abbreviations extension-configs)))))
+             home-fish-extension-abbreviations extension-configs)))
+   (functions
+    (append (home-fish-configuration-functions original-config)
+            (append-map
+             home-fish-extension-functions extension-configs)))))
 
 ;; TODO: Support for generating completion files
 ;; TODO: Support for installing plugins
